@@ -13,8 +13,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const SECRET_PASSPHRASE = "SUA_SENHA_ULTRA_SECRETA_VAI_AQUI"; 
-const ENCRYPTION_KEY = crypto.createHash('sha256').update(String(SECRET_PASSPHRASE)).digest('base64').substr(0, 32);
+const SECRET_PASSPHRASE = process.env.CHAVE_SECRETA_SORTEIO || "SENHA_PADRAO_PARA_TESTES_LOCAIS_123"; 
+const ENCRYPTION_KEY = crypto.createHash('sha256').update(String(SECRET_PASSPHRASE)).digest('base64').substring(0, 32);
 const IV_LENGTH = 16; 
 
 function encrypt(text) {
@@ -35,7 +35,10 @@ function decrypt(text) {
   return decrypted.toString();
 }
 
-const uploadDir = path.join(process.cwd(), "public/uploads");
+const isVercel = !!process.env.VERCEL;
+
+const uploadDir = isVercel ? path.join("/tmp", "uploads") : path.join(process.cwd(), "public/uploads");
+
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 const storage = multer.diskStorage({
@@ -54,35 +57,31 @@ export const pool = new Pool({
 });
 
 function shuffle(array) {
-  return array.map(e => ({v: e, o: Math.random()}))
-              .sort((a,b) => a.o - b.o)
-              .map(e => e.v);
+  return array.map(e => ({v: e, o: Math.random()})).sort((a,b) => a.o - b.o).map(e => e.v);
 }
+
+
+app.get("/", (req, res) => res.send("API Amigo Profético rodando!"));
 
 app.post("/api/registrar", upload.single("foto"), async (req, res) => {
   try {
     const { nome, telefone } = req.body;
 
-    if (!nome || !telefone) {
-      return res.status(400).json({ error: "⚠️ Nome e telefone são obrigatórios." });
-    }
-
-    if (!req.file) {
-      return res.status(400).json({ error: "⚠️ A foto é obrigatória para o sorteio!" });
-    }
+    if (!nome || !telefone) return res.status(400).json({ error: "⚠️ Nome e telefone são obrigatórios." });
+    if (!req.file) return res.status(400).json({ error: "⚠️ A foto é obrigatória para o sorteio!" });
 
     const telefoneLimpo = telefone.replace(/\D/g, "");
     const codigo_hash = crypto.createHash("sha256").update(nome).digest("hex").substring(0,7);
 
     const ext = path.extname(req.file.originalname);
     const newFilename = `foto-${codigo_hash}${ext}`;
-    const oldPath = path.join(uploadDir, req.file.filename);
-    const newPath = path.join(uploadDir, newFilename);
     
-    if (fs.existsSync(oldPath)) {
-      fs.renameSync(oldPath, newPath);
+    const finalPath = path.join(uploadDir, newFilename);
+    if (fs.existsSync(req.file.path)) {
+        fs.renameSync(req.file.path, finalPath);
     }
-    const fotoPath = `/uploads/${newFilename}`;
+
+    const fotoPath = isVercel ? `/api/uploads/${newFilename}` : `/uploads/${newFilename}`;
 
     const result = await pool.query(
       `INSERT INTO participantes (nome, telefone, codigo_hash, foto)
@@ -94,23 +93,14 @@ app.post("/api/registrar", upload.single("foto"), async (req, res) => {
 
   } catch (err) {
     console.error("Erro no cadastro:", err);
-
-    
     if (err.code === '23505') {
-      if (err.constraint === 'unique_nome') {
-        return res.status(409).json({ error: "⚠️ Já existe alguém com esse nome! Adicione o sobrenome." });
-      }
-      if (err.constraint && err.constraint.includes('telefone')) {
-        return res.status(409).json({ error: "⚠️ Este telefone já está cadastrado." });
-      }
+      if (err.constraint === 'unique_nome') return res.status(409).json({ error: "⚠️ Já existe alguém com esse nome! Adicione o sobrenome." });
+      if (err.constraint && err.constraint.includes('telefone')) return res.status(409).json({ error: "⚠️ Este telefone já está cadastrado." });
       return res.status(409).json({ error: "⚠️ Usuário já cadastrado." });
     }
-
-    if (err.code === '23502') {
-       return res.status(400).json({ error: "⚠️ Dados obrigatórios faltando (foto ou nome)." });
-    }
-
-    res.status(500).json({ error: "Erro interno no servidor. Tente novamente." });
+    if (err.code === '23502') return res.status(400).json({ error: "⚠️ Dados obrigatórios faltando." });
+    
+    res.status(500).json({ error: "Erro interno no servidor." });
   }
 });
 
@@ -139,13 +129,11 @@ app.post("/api/sortear", async (req, res) => {
     if (!solicitante) return res.status(403).json({ error: "Dados incorretos ou código inválido." });
 
     const checkSorteio = await pool.query(
-      `SELECT * FROM sorteios WHERE participante_id = $1`,
-      [solicitante.id]
+      `SELECT * FROM sorteios WHERE participante_id = $1`, [solicitante.id]
     );
 
     if (checkSorteio.rows.length > 0) {
       const registro = checkSorteio.rows[0];
-      
       const amigoId = decrypt(registro.amigo_encriptado);
       const amigo = participantes.find(p => p.id.toString() === amigoId);
 
@@ -174,15 +162,14 @@ app.post("/api/sortear", async (req, res) => {
 
     if (!valido) throw new Error("Erro ao gerar combinações válidas.");
 
+    const indiceSolicitante = participantes.findIndex(p => p.id === solicitante.id);
+    const meuAmigo = listaSorteada[indiceSolicitante];
+
     for (let i = 0; i < participantes.length; i++) {
       const pQuemTira = participantes[i];
       const pQuemFoiTirado = listaSorteada[i];
-
       const idCriptografado = encrypt(pQuemFoiTirado.id);
-
-      const hashTransacao = crypto.createHash("sha256")
-        .update(`${pQuemTira.id}-${pQuemFoiTirado.id}-${Date.now()}`)
-        .digest("hex");
+      const hashTransacao = crypto.createHash("sha256").update(`${pQuemTira.id}-${pQuemFoiTirado.id}-${Date.now()}`).digest("hex");
 
       await pool.query(
         `INSERT INTO sorteios (participante_id, amigo_encriptado, hash_transacao)
@@ -190,9 +177,6 @@ app.post("/api/sortear", async (req, res) => {
         [pQuemTira.id, idCriptografado, hashTransacao]
       );
     }
-
-    const indiceSolicitante = participantes.findIndex(p => p.id === solicitante.id);
-    const meuAmigo = listaSorteada[indiceSolicitante];
 
     const meuSorteioHash = await pool.query(
         "SELECT hash_transacao FROM sorteios WHERE participante_id = $1", 
@@ -202,7 +186,7 @@ app.post("/api/sortear", async (req, res) => {
     res.json({ 
         ok: true, 
         nome: meuAmigo.nome,
-        foto: meuAmigo.foto, 
+        foto: meuAmigo.foto,
         hash: meuSorteioHash.rows[0].hash_transacao
     });
 
@@ -221,5 +205,19 @@ app.post("/api/resetar", async (req, res) => {
     }
 });
 
-app.use("/uploads", express.static(path.join(process.cwd(), "public/uploads")));
-app.listen(3000, () => console.log("🔥 Backend Blindado rodando na 3000"));
+app.get("/api/uploads/:filename", (req, res) => {
+    const filepath = path.join(uploadDir, req.params.filename);
+    if (fs.existsSync(filepath)) {
+        res.setHeader('Content-Type', 'image/jpeg'); 
+        res.sendFile(filepath);
+    } else {
+        res.status(404).send("Foto não encontrada (Servidor Serverless limpou a temp)");
+    }
+});
+
+if (!isVercel) {
+  app.use("/uploads", express.static(path.join(process.cwd(), "public/uploads")));
+  app.listen(3000, () => console.log("🔥 Backend rodando localmente: http://localhost:3000"));
+}
+
+export default app;
