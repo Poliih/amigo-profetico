@@ -1,6 +1,7 @@
 {
   "name": "amigo-profetico",
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "type": "module",
   "engines": {
     "node": "20.x"
   },
@@ -8,25 +9,18 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "node server.js"
+    "start": "node api/index.js"
   },
   "dependencies": {
-    "body-parser": "^2.2.1",
     "cors": "^2.8.5",
-    "dotenv": "^17.2.3",
-    "express": "^5.1.0",
-    "multer": "^2.0.2",
-    "pg": "^8.16.3",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "multer": "1.4.5-lts.1",
+    "pg": "^8.11.3",
     "vue": "^3.4.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^4.0.0",
     "vite": "^5.0.0"
-  },
-  "description": "This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.",
-  "main": "server.js",
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module"
+  }
 }
